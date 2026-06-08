@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "logalyzer"
+version = "0.1.0"
+description = "A fast local log analysis command-line tool for developers and DevOps"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{ name = "Logalyzer Team" }]
+license = { text = "MIT" }
+dependencies = [
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "python-dateutil>=2.8.0",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+logalyzer = "logalyzer.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["logalyzer*"]
