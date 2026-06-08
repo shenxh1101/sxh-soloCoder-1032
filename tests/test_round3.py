@@ -402,6 +402,166 @@ def test_empty_report_generation():
         assert "Suggestions" in content
 
 
+def test_absolute_time_template_save_show():
+    start_dt = datetime(2024, 1, 15, 10, 0, 0)
+    end_dt = datetime(2024, 1, 15, 11, 0, 0)
+
+    query = SavedQuery(
+        name="time-window-errors",
+        description="Errors in specific time window",
+        command="filter",
+        options={
+            "path": "/var/log/app.log",
+            "start_time": start_dt.isoformat(),
+            "end_time": end_dt.isoformat(),
+            "levels": ["ERROR"],
+            "limit": 50,
+        },
+    )
+
+    cmd = build_command_from_query(query)
+
+    assert "--start-time" in cmd
+    assert "--end-time" in cmd
+    assert start_dt.isoformat() in cmd
+    assert end_dt.isoformat() in cmd
+    assert "-l ERROR" in cmd
+    assert "-n 50" in cmd
+    assert "/var/log/app.log" in cmd
+
+
+def test_watch_pending_stack_auto_flush():
+    from logalyzer.watcher import LogFileTracker
+    from datetime import datetime
+    import time
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log_file = os.path.join(tmpdir, "app.log")
+
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write("")
+
+        tracker = LogFileTracker(log_file, start_from_end=True)
+
+        error_line = "2024-01-15 10:00:00 ERROR Request failed"
+        exc_line = "java.lang.NullPointerException: User not found"
+        stack_line_1 = "    at com.example.Service.getUser(Service.java:123)"
+        stack_line_2 = "    at com.example.Controller.handle(Controller.java:45)"
+
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(error_line + "\n")
+            f.write(exc_line + "\n")
+            f.write(stack_line_1 + "\n")
+            f.write(stack_line_2 + "\n")
+
+        lines = tracker.read_new_lines()
+        entries = tracker.process_new_lines(lines)
+
+        assert len(entries) == 0
+
+        assert tracker.has_pending_stack(max_wait_seconds=0.5) is True
+        assert tracker.current_entry is not None
+        assert tracker.current_entry.level == "ERROR"
+
+        time.sleep(0.6)
+
+        assert tracker.has_pending_stack(max_wait_seconds=0.5) is False
+
+        entry = tracker.flush()
+        assert entry is not None
+        assert entry.level == "ERROR"
+        assert len(entry.stack_trace) == 3
+        assert "java.lang.NullPointerException: User not found" in entry.stack_trace
+        assert "at com.example.Service.getUser" in entry.stack_trace[1]
+
+
+def test_report_includes_filter_conditions():
+    now = datetime.now()
+    entries = [
+        create_test_log_entry(
+            level="ERROR",
+            message="Test error",
+            timestamp=now,
+            api_path="/api/test",
+            duration_ms=100,
+        ),
+    ]
+
+    from logalyzer.analyzer import analyze_stats
+
+    stats_result = analyze_stats(iter(entries))
+    options = FilterOptions(
+        levels=["ERROR"],
+        keywords=["test"],
+        exclude_keywords=["healthcheck"],
+        api_path="/api/",
+        min_duration_ms=50,
+        has_stack_trace=False,
+    )
+
+    report_data = build_report(
+        entries, stats_result, options,
+        path="/var/log/app.log",
+    )
+
+    text_content = format_report_text(report_data, use_emoji=False)
+    md_content = format_report_markdown(report_data, use_emoji=False)
+
+    for content in [text_content, md_content]:
+        assert "/var/log/app.log" in content
+        assert "ERROR" in content
+        assert "test" in content
+        assert "healthcheck" in content
+        assert "/api/" in content
+        assert "50" in content
+
+    assert "FILTER CONDITIONS" in text_content
+    assert "Filter Conditions" in md_content
+
+
+def test_report_java_stack_shows_exception_header():
+    from logalyzer.parser import parse_log_line
+    from logalyzer.analyzer import analyze_stats
+
+    error_line = "2024-01-15 10:00:00 ERROR Processing request failed"
+    exc_line = "java.lang.IllegalArgumentException: Invalid user ID"
+    stack_line_1 = "    at com.example.UserService.validate(UserService.java:123)"
+    stack_line_2 = "    at com.example.UserController.create(UserController.java:45)"
+    stack_line_3 = "Caused by: java.lang.NumberFormatException: For input string: 'abc'"
+    stack_line_4 = "    at java.lang.Integer.parseInt(Integer.java:580)"
+
+    entry = parse_log_line(error_line)
+    entry.source_file = "test.log"
+    entry.line_number = 1
+
+    exc_entry = parse_log_line(exc_line)
+    stack_entry_1 = parse_log_line(stack_line_1)
+    stack_entry_2 = parse_log_line(stack_line_2)
+    stack_entry_3 = parse_log_line(stack_line_3)
+    stack_entry_4 = parse_log_line(stack_line_4)
+
+    entry.stack_trace = [
+        exc_line, stack_line_1, stack_line_2, stack_line_3, stack_line_4
+    ]
+
+    entries = [entry]
+    stats_result = analyze_stats(iter(entries))
+    options = FilterOptions(levels=["ERROR"])
+
+    report_data = build_report(entries, stats_result, options, path="test.log")
+
+    md_content = format_report_markdown(report_data, use_emoji=False)
+    text_content = format_report_text(report_data, use_emoji=False)
+
+    for content in [md_content, text_content]:
+        assert "java.lang.IllegalArgumentException" in content
+        assert "Invalid user ID" in content
+        assert "at com.example.UserService.validate" in content
+        assert "at com.example.UserController.create" in content
+        assert "Caused by:" in content
+        assert "java.lang.NumberFormatException" in content
+
+
 if __name__ == "__main__":
     test_validate_time_bucket()
     test_validate_limit()
@@ -419,4 +579,8 @@ if __name__ == "__main__":
     test_build_command_from_query_complete()
     test_reporter_output_to_file()
     test_empty_report_generation()
+    test_absolute_time_template_save_show()
+    test_watch_pending_stack_auto_flush()
+    test_report_includes_filter_conditions()
+    test_report_java_stack_shows_exception_header()
     print("All round 3 tests passed!")

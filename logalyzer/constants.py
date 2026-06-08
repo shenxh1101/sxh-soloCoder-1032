@@ -51,7 +51,7 @@ DURATION_PATTERNS: List[Pattern] = [
 
 EXCEPTION_PATTERN = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*(?:Exception|Error)):")
 
-STACK_TRACE_LINE_PATTERN = re.compile(r"^(?:\s+(?:at\s+|\.{3}\s*\d+\s+more)|Caused by:)")
+STACK_TRACE_LINE_PATTERN = re.compile(r"^(?:\s+(?:at\s+|\.{3}\s*\d+\s+more)|Caused by:|[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*(?:Exception|Error):)")
 
 LOG_LINE_PATTERNS: List[Pattern] = [
     re.compile(

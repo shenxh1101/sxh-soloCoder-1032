@@ -129,6 +129,12 @@ def build_command_from_query(query: SavedQuery) -> str:
     if "reverse" in opts and opts["reverse"]:
         parts.append("--reverse")
 
+    if "start_time" in opts and opts["start_time"]:
+        parts.extend(["--start-time", opts["start_time"]])
+
+    if "end_time" in opts and opts["end_time"]:
+        parts.extend(["--end-time", opts["end_time"]])
+
     if "since" in opts and opts["since"]:
         parts.extend(["--since", f"'{opts['since']}'"])
 

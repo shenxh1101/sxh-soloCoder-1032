@@ -30,6 +30,7 @@ def build_report(
     filter_options: FilterOptions,
     title: str = "Log Analysis Report",
     include_samples: int = 5,
+    path: str = "",
 ) -> Dict[str, Any]:
     timestamps = [e.timestamp for e in entries if e.timestamp]
     min_time = min(timestamps) if timestamps else None
@@ -52,6 +53,7 @@ def build_report(
     return {
         "title": title,
         "generated_at": datetime.now(),
+        "path": path,
         "summary": {
             "total_entries": len(entries),
             "error_count": len(error_entries),
@@ -150,6 +152,7 @@ def format_report_text(report: Dict[str, Any], use_emoji: bool = True) -> str:
     s = report["summary"]
     lines.append("📊 SUMMARY")
     lines.append("-" * 80)
+    lines.append(f"  Data source:      {report.get('path', '-')}")
     lines.append(f"  Total entries:    {s['total_entries']:,}")
     lines.append(f"  Errors:           {s['error_count']:,}")
     lines.append(f"  Warnings:         {s['warning_count']:,}")
@@ -158,6 +161,38 @@ def format_report_text(report: Dict[str, Any], use_emoji: bool = True) -> str:
     lines.append(f"  Unique exceptions:{s['unique_exceptions']}")
     if s["time_range"]["start"] and s["time_range"]["end"]:
         lines.append(f"  Time range:       {format_timestamp(s['time_range']['start'])} → {format_timestamp(s['time_range']['end'])}")
+    lines.append("")
+
+    lines.append("🔍 FILTER CONDITIONS")
+    lines.append("-" * 80)
+    f = report["filter"]
+    if report.get("path"):
+        lines.append(f"  Path:             {report.get('path')}")
+    if f["start_time"]:
+        lines.append(f"  Start time:       {format_timestamp(f['start_time'])}")
+    if f["end_time"]:
+        lines.append(f"  End time:         {format_timestamp(f['end_time'])}")
+    if f["levels"]:
+        lines.append(f"  Levels:           {', '.join(f['levels'])}")
+    if f["keywords"]:
+        lines.append(f"  Keywords:         {', '.join(f['keywords'])}")
+    if f["exclude_keywords"]:
+        lines.append(f"  Exclude keywords: {', '.join(f['exclude_keywords'])}")
+    if f["request_id"]:
+        lines.append(f"  Request ID:       {f['request_id']}")
+    if f["api_path"]:
+        lines.append(f"  API Path:         {f['api_path']}")
+    if f["has_stack_trace"] is not None:
+        lines.append(f"  Has stack trace:  {f['has_stack_trace']}")
+    if f["min_duration_ms"] is not None:
+        lines.append(f"  Min duration:     {f['min_duration_ms']}ms")
+    has_any_filter = any([
+        f.get(k) for k in ["start_time", "end_time", "levels", "keywords",
+                          "exclude_keywords", "request_id", "api_path",
+                          "min_duration_ms"]
+    ]) or f.get("has_stack_trace") is not None or report.get("path")
+    if not has_any_filter:
+        lines.append("  (No filters applied)")
     lines.append("")
 
     stats = report["stats"]
@@ -243,7 +278,25 @@ def format_report_text(report: Dict[str, Any], use_emoji: bool = True) -> str:
                     lines.append(f"        ... and {len(entry.stack_trace) - 3} more lines")
             lines.append("")
 
-    if samples["entries"] and not samples["errors"]:
+    if samples["stack_traces"]:
+        lines.append("📋 SAMPLE STACK TRACES")
+        lines.append("-" * 80)
+        for i, entry in enumerate(samples["stack_traces"], 1):
+            if entry.timestamp:
+                lines.append(f"  [{i}] {format_timestamp(entry.timestamp)} {entry.level or ''}")
+            else:
+                lines.append(f"  [{i}] Stack trace")
+            if entry.message and entry.message.strip():
+                lines.append(f"      {entry.message[:100]}")
+            if entry.stack_trace:
+                lines.append(f"      Stack trace ({len(entry.stack_trace)} lines):")
+                for line in entry.stack_trace[:5]:
+                    lines.append(f"        {line}")
+                if len(entry.stack_trace) > 5:
+                    lines.append(f"        ... and {len(entry.stack_trace) - 5} more lines")
+            lines.append("")
+
+    if samples["entries"] and not samples["errors"] and not samples["stack_traces"]:
         lines.append("📝 SAMPLE ENTRIES")
         lines.append("-" * 80)
         for i, entry in enumerate(samples["entries"], 1):
@@ -314,6 +367,8 @@ def format_report_markdown(report: Dict[str, Any], use_emoji: bool = True) -> st
     lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
+    if report.get("path"):
+        lines.append(f"| Data source | {report.get('path')} |")
     lines.append(f"| Total entries | {s['total_entries']:,} |")
     lines.append(f"| Errors | {s['error_count']:,} |")
     lines.append(f"| Warnings | {s['warning_count']:,} |")
@@ -322,6 +377,36 @@ def format_report_markdown(report: Dict[str, Any], use_emoji: bool = True) -> st
     lines.append(f"| Unique exceptions | {s['unique_exceptions']} |")
     if s["time_range"]["start"] and s["time_range"]["end"]:
         lines.append(f"| Time range | {format_timestamp(s['time_range']['start'])} → {format_timestamp(s['time_range']['end'])} |")
+    lines.append("")
+
+    lines.append("## 🔍 Filter Conditions")
+    lines.append("")
+    f = report["filter"]
+    items = []
+    if report.get("path"):
+        items.append(f"- **Data source:** {report.get('path')}")
+    if f["start_time"]:
+        items.append(f"- **Start time:** {format_timestamp(f['start_time'])}")
+    if f["end_time"]:
+        items.append(f"- **End time:** {format_timestamp(f['end_time'])}")
+    if f["levels"]:
+        items.append(f"- **Levels:** {', '.join(f['levels'])}")
+    if f["keywords"]:
+        items.append(f"- **Keywords:** {', '.join(f['keywords'])}")
+    if f["exclude_keywords"]:
+        items.append(f"- **Exclude keywords:** {', '.join(f['exclude_keywords'])}")
+    if f["request_id"]:
+        items.append(f"- **Request ID:** {f['request_id']}")
+    if f["api_path"]:
+        items.append(f"- **API Path:** {f['api_path']}")
+    if f["has_stack_trace"] is not None:
+        items.append(f"- **Has stack trace:** {f['has_stack_trace']}")
+    if f["min_duration_ms"] is not None:
+        items.append(f"- **Min duration:** {f['min_duration_ms']}ms")
+    if items:
+        lines.extend(items)
+    else:
+        lines.append("_No filters applied_")
     lines.append("")
 
     stats = report["stats"]
@@ -419,6 +504,32 @@ def format_report_markdown(report: Dict[str, Any], use_emoji: bool = True) -> st
                 lines.append("```")
             lines.append("")
 
+    if samples["stack_traces"]:
+        lines.append("## 📋 Sample Stack Traces")
+        lines.append("")
+        for i, entry in enumerate(samples["stack_traces"], 1):
+            if entry.timestamp:
+                lines.append(f"### [{i}] {format_timestamp(entry.timestamp)} - {entry.level or 'Stack'}")
+            else:
+                lines.append(f"### [{i}] Stack Trace")
+            lines.append("")
+            if entry.message and entry.message.strip():
+                lines.append(f"**Message:** {entry.message}")
+                lines.append("")
+            if entry.source_file:
+                lines.append(f"- **Source:** {entry.source_file}:{entry.line_number}")
+                lines.append("")
+            if entry.stack_trace:
+                lines.append("**Stack trace:**")
+                lines.append("")
+                lines.append("```")
+                for line in entry.stack_trace[:10]:
+                    lines.append(line)
+                if len(entry.stack_trace) > 10:
+                    lines.append(f"... and {len(entry.stack_trace) - 10} more lines")
+                lines.append("```")
+            lines.append("")
+
     lines.append("---")
     lines.append("")
     lines.append("*Report generated by logalyzer*")
@@ -437,6 +548,7 @@ def generate_report(
     title: str = "Log Analysis Report",
     include_samples: int = 5,
     time_bucket_minutes: int = 5,
+    path: str = "",
 ) -> None:
     if not entries:
         stats_result = StatsResult()
@@ -449,6 +561,7 @@ def generate_report(
         filter_options=filter_options,
         title=title,
         include_samples=include_samples,
+        path=path,
     )
 
     if format_type == "markdown":

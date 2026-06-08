@@ -123,7 +123,6 @@ class LogWatcher:
         self._discover_files()
 
         all_entries: List[LogEntry] = []
-        has_pending = False
 
         for tracker in self.trackers.values():
             lines = tracker.read_new_lines()
@@ -133,12 +132,8 @@ class LogWatcher:
                     if matches_filter(entry, self.filter_options):
                         all_entries.append(entry)
 
-            if tracker.has_pending_stack():
-                has_pending = True
-
-        if not has_pending:
-            for tracker in self.trackers.values():
-                if tracker.current_entry is not None and not tracker._in_stack_trace:
+            if tracker.current_entry is not None:
+                if not tracker.has_pending_stack():
                     entry = tracker.flush()
                     if entry and matches_filter(entry, self.filter_options):
                         all_entries.append(entry)

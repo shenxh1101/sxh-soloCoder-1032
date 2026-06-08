@@ -511,7 +511,7 @@ def report(path, output, recursive, merge, sort, start_time, end_time, since, un
 
     with console.status("[cyan]Generating report...[/cyan]"):
         stats_result = analyze_stats(iter(filtered), time_bucket_minutes=time_bucket)
-        report_data = build_report(filtered, stats_result, options, title=title, include_samples=samples)
+        report_data = build_report(filtered, stats_result, options, title=title, include_samples=samples, path=path)
 
         if format_type == "markdown":
             content = format_report_markdown(report_data, use_emoji=not print_only)
@@ -673,6 +673,8 @@ def show_saved_query(name):
 @click.option("--merge/--no-merge", default=None, help="Override merge flag")
 @click.option("--sort", type=click.Choice(["timestamp", "level", "file", "duration"]), help="Override sort order")
 @click.option("--reverse", is_flag=True, default=None, help="Override reverse sort flag")
+@click.option("--start-time", callback=parse_time_range, help="Override absolute start time")
+@click.option("--end-time", callback=parse_time_range, help="Override absolute end time")
 @click.option("--since", help="Override relative start time")
 @click.option("--until", help="Override relative end time")
 @click.option("--level", "-l", "levels", multiple=True, help="Override log levels filter")
@@ -685,7 +687,7 @@ def show_saved_query(name):
 @click.option("--limit", "-n", type=int, help="Override result limit")
 @click.option("--format", "-f", "format_type", type=click.Choice(["table", "raw", "compact"]), help="Override output format")
 @click.option("--context", "-C", type=int, help="Override context lines")
-def run_query(name, path, recursive, merge, sort, reverse, since, until, levels, keywords, exclude, request_id, api_path, has_stack, min_duration, limit, format_type, context):
+def run_query(name, path, recursive, merge, sort, reverse, start_time, end_time, since, until, levels, keywords, exclude, request_id, api_path, has_stack, min_duration, limit, format_type, context):
     """Run a saved query with optional parameter overrides."""
     from .config import get_query as get_saved_query, mark_query_used
 
@@ -720,11 +722,25 @@ def run_query(name, path, recursive, merge, sort, reverse, since, until, levels,
     final_sort = sort or opts.get("sort", "timestamp")
     final_reverse = reverse if reverse is not None else opts.get("reverse", False)
 
+    final_start_time = start_time
+    if final_start_time is None and opts.get("start_time"):
+        try:
+            final_start_time = date_parser.parse(opts["start_time"])
+        except Exception:
+            final_start_time = None
+
+    final_end_time = end_time
+    if final_end_time is None and opts.get("end_time"):
+        try:
+            final_end_time = date_parser.parse(opts["end_time"])
+        except Exception:
+            final_end_time = None
+
     final_since = since or opts.get("since")
     final_until = until or opts.get("until")
 
     filter_options = build_filter_options(
-        None, None, final_since, final_until,
+        final_start_time, final_end_time, final_since, final_until,
         final_levels, final_keywords, final_exclude,
         final_request_id, final_api_path, final_has_stack, final_min_duration
     )
