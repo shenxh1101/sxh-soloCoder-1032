@@ -1,10 +1,31 @@
-from typing import List, Dict, Iterator
+from typing import List, Dict, Iterator, Optional
 from collections import defaultdict
 from datetime import datetime
+from dataclasses import dataclass, field
 import statistics
 
 from .models import LogEntry, StatsResult, ApiStats
 from .constants import EXCEPTION_PATTERN
+
+
+@dataclass
+class GroupTimeBucket:
+    bucket: str
+    count: int = 0
+    error_count: int = 0
+    p95: float = 0
+    durations: List[float] = field(default_factory=list)
+
+
+@dataclass
+class GroupStats:
+    key: str
+    total_count: int = 0
+    error_count: int = 0
+    avg_time: float = 0
+    p95: float = 0
+    time_buckets: Dict[str, GroupTimeBucket] = field(default_factory=dict)
+    durations: List[float] = field(default_factory=list)
 
 
 def percentile(data: List[float], p: float) -> float:
@@ -22,6 +43,25 @@ def percentile(data: List[float], p: float) -> float:
 def get_time_bucket_key(ts: datetime, bucket_minutes: int = 5) -> str:
     bucket = (ts.minute // bucket_minutes) * bucket_minutes
     return ts.strftime(f"%Y-%m-%d %H:{bucket:02d}")
+
+
+def extract_exception_type_from_entry(entry: LogEntry) -> Optional[str]:
+    exc_match = EXCEPTION_PATTERN.search(entry.raw)
+    if exc_match:
+        return exc_match.group(1)
+
+    if entry.stack_trace:
+        for line in entry.stack_trace:
+            if line.startswith("Caused by:"):
+                exc_match = EXCEPTION_PATTERN.search(line)
+                if exc_match:
+                    return exc_match.group(1)
+
+            exc_match = EXCEPTION_PATTERN.search(line)
+            if exc_match:
+                return exc_match.group(1)
+
+    return None
 
 
 def analyze_stats(
@@ -61,15 +101,13 @@ def analyze_stats(
                 stats.error_count += 1
 
         has_exception = False
-        exc_type = None
+        exc_type = extract_exception_type_from_entry(entry)
+
+        if exc_type:
+            result.exception_counts[exc_type] = result.exception_counts.get(exc_type, 0) + 1
+            has_exception = True
 
         if entry.stack_trace and len(entry.stack_trace) > 0:
-            exc_match = EXCEPTION_PATTERN.search(entry.raw)
-            if exc_match:
-                exc_type = exc_match.group(1)
-                result.exception_counts[exc_type] = result.exception_counts.get(exc_type, 0) + 1
-                has_exception = True
-
             if entry.message:
                 key = entry.message[:100]
                 error_messages[key] += 1
@@ -78,12 +116,6 @@ def analyze_stats(
             if entry.message:
                 key = entry.message[:100]
                 error_messages[key] += 1
-
-            exc_match = EXCEPTION_PATTERN.search(entry.raw)
-            if exc_match:
-                exc_type = exc_match.group(1)
-                result.exception_counts[exc_type] = result.exception_counts.get(exc_type, 0) + 1
-                has_exception = True
 
         if has_exception and exc_type and entry.message:
             group_key = (exc_type, entry.message[:80])
@@ -100,7 +132,14 @@ def analyze_stats(
             stats.min_time = 0
 
     for (exc_type, msg), count in exception_groups.items():
-        group_key = f"{exc_type}: {msg}"
+        msg_clean = msg.strip()
+        exc_type_pattern = exc_type.replace(".", r"\.") + r":\s*"
+        import re
+        if re.match(f"^{exc_type_pattern}", msg_clean):
+            msg_clean = re.sub(f"^{exc_type_pattern}", "", msg_clean)
+        elif msg_clean.startswith(exc_type):
+            msg_clean = msg_clean[len(exc_type):].lstrip(": ")
+        group_key = f"{exc_type}: {msg_clean}" if msg_clean else exc_type
         result.exception_groups[group_key] = count
 
     sorted_errors = sorted(error_messages.items(), key=lambda x: x[1], reverse=True)
@@ -121,6 +160,58 @@ def analyze_stats(
     result.most_frequent_exceptions = sorted_exceptions[:top_n]
 
     return result
+
+
+def analyze_group_stats(
+    entries: List[LogEntry],
+    group_by: str = "api_path",
+    time_bucket_minutes: int = 5,
+) -> Dict[str, GroupStats]:
+    groups: Dict[str, GroupStats] = {}
+
+    for entry in entries:
+        if group_by == "api_path":
+            key = entry.api_path
+        elif group_by == "request_id":
+            key = entry.request_id
+        else:
+            continue
+
+        if not key:
+            continue
+
+        if key not in groups:
+            groups[key] = GroupStats(key=key)
+
+        group = groups[key]
+        group.total_count += 1
+
+        if entry.level and entry.level in ("ERROR", "FATAL", "CRITICAL"):
+            group.error_count += 1
+
+        if entry.duration_ms is not None:
+            group.durations.append(entry.duration_ms)
+
+        if entry.timestamp:
+            bucket_key = get_time_bucket_key(entry.timestamp, time_bucket_minutes)
+            if bucket_key not in group.time_buckets:
+                group.time_buckets[bucket_key] = GroupTimeBucket(bucket=bucket_key)
+            bucket = group.time_buckets[bucket_key]
+            bucket.count += 1
+            if entry.level and entry.level in ("ERROR", "FATAL", "CRITICAL"):
+                bucket.error_count += 1
+            if entry.duration_ms is not None:
+                bucket.durations.append(entry.duration_ms)
+
+    for group in groups.values():
+        if group.durations:
+            group.avg_time = sum(group.durations) / len(group.durations)
+            group.p95 = percentile(group.durations, 95)
+        for bucket in group.time_buckets.values():
+            if bucket.durations:
+                bucket.p95 = percentile(bucket.durations, 95)
+
+    return groups
 
 
 def find_slow_apis(

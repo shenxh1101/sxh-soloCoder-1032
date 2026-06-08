@@ -114,6 +114,27 @@ def build_command_from_query(query: SavedQuery) -> str:
     if "path" in opts and opts["path"]:
         parts.append(opts["path"])
 
+    if "recursive" in opts and opts["recursive"] is not None:
+        if opts["recursive"]:
+            parts.append("-r")
+        else:
+            parts.append("-R")
+
+    if "merge" in opts and opts["merge"] is False:
+        parts.append("--no-merge")
+
+    if "sort" in opts and opts["sort"] and opts["sort"] != "timestamp":
+        parts.extend(["--sort", opts["sort"]])
+
+    if "reverse" in opts and opts["reverse"]:
+        parts.append("--reverse")
+
+    if "since" in opts and opts["since"]:
+        parts.extend(["--since", f"'{opts['since']}'"])
+
+    if "until" in opts and opts["until"]:
+        parts.extend(["--until", f"'{opts['until']}'"])
+
     if "levels" in opts and opts["levels"]:
         for lvl in opts["levels"]:
             parts.extend(["-l", lvl])
@@ -129,7 +150,28 @@ def build_command_from_query(query: SavedQuery) -> str:
     if "request_id" in opts and opts["request_id"]:
         parts.extend(["--request-id", opts["request_id"]])
 
+    if "api_path" in opts and opts["api_path"]:
+        parts.extend(["--api-path", opts["api_path"]])
+
+    if "has_stack" in opts and opts["has_stack"] is not None:
+        if opts["has_stack"]:
+            parts.append("--has-stack")
+        else:
+            parts.append("--no-stack")
+
     if "min_duration" in opts and opts["min_duration"] is not None:
         parts.extend(["--min-duration", str(opts["min_duration"])])
+
+    if "format" in opts and opts["format"] and opts["format"] != "table":
+        parts.extend(["-f", opts["format"]])
+
+    if "limit" in opts and opts["limit"] is not None:
+        parts.extend(["-n", str(opts["limit"])])
+
+    if "context" in opts and opts["context"] is not None:
+        parts.extend(["-C", str(opts["context"])])
+
+    if "show_stack" in opts and opts["show_stack"] is False:
+        parts.append("--no-stack-trace")
 
     return " ".join(parts)

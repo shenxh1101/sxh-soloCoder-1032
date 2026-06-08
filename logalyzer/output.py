@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
 from rich.console import Console
 from rich.table import Table
@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich import box
 
 from .models import LogEntry, LogFile, StatsResult
+from .analyzer import GroupStats
 
 console = Console()
 
@@ -223,16 +224,16 @@ def print_stats(stats: StatsResult, top_n: int = 10) -> None:
 
     if stats.slowest_apis:
         console.print()
-        console.print(f"[bold magenta]🏆 Top {min(top_n, len(stats.slowest_apis))} Slowest APIs (by avg time):[/bold magenta]")
+        console.print(f"[bold magenta]Top {min(top_n, len(stats.slowest_apis))} Slowest APIs (by avg time):[/bold magenta]")
         for i, (path, avg, p95, count) in enumerate(stats.slowest_apis, 1):
             medal = ""
             if i == 1:
-                medal = "🥇"
+                medal = "[1]"
             elif i == 2:
-                medal = "🥈"
+                medal = "[2]"
             elif i == 3:
-                medal = "🥉"
-            console.print(f"  {medal}[yellow]{i:>2}.[/yellow] [red]{avg:>8.1f}ms[/red] (P95: {p95:.0f}ms) {count:>4}x  {path}")
+                medal = "[3]"
+            console.print(f"  {medal} [yellow]{i:>2}.[/yellow] [red]{avg:>8.1f}ms[/red] (P95: {p95:.0f}ms) {count:>4}x  {path}")
 
     if stats.exception_groups:
         console.print()
@@ -249,16 +250,16 @@ def print_stats(stats: StatsResult, top_n: int = 10) -> None:
 
     if stats.most_frequent_exceptions:
         console.print()
-        console.print(f"[bold magenta]🏆 Top {min(top_n, len(stats.most_frequent_exceptions))} Most Frequent Exceptions:[/bold magenta]")
+        console.print(f"[bold magenta]Top {min(top_n, len(stats.most_frequent_exceptions))} Most Frequent Exceptions:[/bold magenta]")
         for i, (key, count) in enumerate(stats.most_frequent_exceptions, 1):
             medal = ""
             if i == 1:
-                medal = "🥇"
+                medal = "[1]"
             elif i == 2:
-                medal = "🥈"
+                medal = "[2]"
             elif i == 3:
-                medal = "🥉"
-            console.print(f"  {medal}[yellow]{i:>2}.[/yellow] {count:>4}x  [red]{key[:100]}[/red]")
+                medal = "[3]"
+            console.print(f"  {medal} [yellow]{i:>2}.[/yellow] {count:>4}x  [red]{key[:100]}[/red]")
 
     if stats.top_errors:
         console.print()
@@ -317,3 +318,70 @@ def print_trace_flow(entries: List[LogEntry], request_id: str) -> None:
     if first_ts and entries[-1].timestamp:
         total_ms = (entries[-1].timestamp - first_ts).total_seconds() * 1000
         console.print(f"\n[dim]Total duration: {total_ms:.0f}ms, {len(entries)} entries[/dim]")
+
+
+def print_group_stats(
+    group_stats: Dict[str, GroupStats],
+    group_by: str,
+    top_n: int = 10,
+) -> None:
+    if not group_stats:
+        console.print("[yellow]No group data available[/yellow]")
+        return
+
+    sorted_groups = sorted(
+        group_stats.values(),
+        key=lambda g: g.total_count,
+        reverse=True
+    )
+
+    console.print()
+    group_title = "API Path" if group_by == "api_path" else "Request ID"
+    console.print(Panel(f"[bold cyan]Group View by {group_title}[/bold cyan]", border_style="cyan"))
+
+    table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
+    table.add_column(group_title, style="bold")
+    table.add_column("Count", justify="right")
+    table.add_column("Errors", justify="right")
+    table.add_column("Avg(ms)", justify="right")
+    table.add_column("P95(ms)", justify="right")
+
+    for group in sorted_groups[:top_n]:
+        err_style = "red" if group.error_count > 0 else "default"
+        p95_style = "red" if group.p95 > 1000 else "yellow" if group.p95 > 500 else "default"
+        table.add_row(
+            group.key[:80],
+            str(group.total_count),
+            f"[{err_style}]{group.error_count}[/{err_style}]",
+            f"{group.avg_time:.1f}",
+            f"[{p95_style}]{group.p95:.1f}[/{p95_style}]",
+        )
+
+    console.print(table)
+
+    for group in sorted_groups[:5]:
+        if len(group.time_buckets) >= 2:
+            console.print()
+            console.print(f"[bold magenta]Time Trend for: {group.key[:60]}[/bold magenta]")
+            trend_table = Table(show_header=True, header_style="bold", box=box.SIMPLE)
+            trend_table.add_column("Time Bucket")
+            trend_table.add_column("Count", justify="right")
+            trend_table.add_column("Errors", justify="right")
+            trend_table.add_column("P95(ms)", justify="right")
+            trend_table.add_column("Trend")
+
+            max_count = max(b.count for b in group.time_buckets.values()) if group.time_buckets else 0
+            for bucket_key in sorted(group.time_buckets.keys()):
+                bucket = group.time_buckets[bucket_key]
+                bar_len = min(20, int(bucket.count / max_count * 20)) if max_count else 0
+                bar = "█" * bar_len
+                err_style = "red" if bucket.error_count > 0 else "default"
+                p95_style = "red" if bucket.p95 > 1000 else "yellow" if bucket.p95 > 500 else "default"
+                trend_table.add_row(
+                    bucket.bucket,
+                    str(bucket.count),
+                    f"[{err_style}]{bucket.error_count}[/{err_style}]",
+                    f"[{p95_style}]{bucket.p95:.1f}[/{p95_style}]",
+                    f"[cyan]{bar}[/cyan]",
+                )
+            console.print(trend_table)
