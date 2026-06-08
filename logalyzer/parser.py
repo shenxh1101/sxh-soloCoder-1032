@@ -172,6 +172,41 @@ def parse_log_file(
         raise RuntimeError(f"Failed to parse log file {file_path}: {e}")
 
 
+def count_file_lines(file_path: str, encoding: str) -> int:
+    count = 0
+    try:
+        with open(file_path, "r", encoding=encoding, errors="replace") as f:
+            for _ in f:
+                count += 1
+    except Exception:
+        pass
+    return count
+
+
+def to_naive(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
+def compare_times(dt1: Optional[datetime], dt2: Optional[datetime]) -> int:
+    dt1_naive = to_naive(dt1)
+    dt2_naive = to_naive(dt2)
+    if dt1_naive is None and dt2_naive is None:
+        return 0
+    if dt1_naive is None:
+        return -1
+    if dt2_naive is None:
+        return 1
+    if dt1_naive < dt2_naive:
+        return -1
+    if dt1_naive > dt2_naive:
+        return 1
+    return 0
+
+
 def scan_log_file(file_path: str) -> LogFile:
     stat = os.stat(file_path)
     encoding = detect_encoding(file_path)
@@ -182,6 +217,8 @@ def scan_log_file(file_path: str) -> LogFile:
         encoding=encoding,
     )
 
+    log_file.raw_line_count = count_file_lines(file_path, encoding)
+
     min_time: Optional[datetime] = None
     max_time: Optional[datetime] = None
     level_counts = {}
@@ -191,9 +228,9 @@ def scan_log_file(file_path: str) -> LogFile:
         if entry.level:
             level_counts[entry.level] = level_counts.get(entry.level, 0) + 1
         if entry.timestamp:
-            if min_time is None or entry.timestamp < min_time:
+            if min_time is None or compare_times(entry.timestamp, min_time) < 0:
                 min_time = entry.timestamp
-            if max_time is None or entry.timestamp > max_time:
+            if max_time is None or compare_times(entry.timestamp, max_time) > 0:
                 max_time = entry.timestamp
 
     log_file.level_counts = level_counts

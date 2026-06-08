@@ -113,7 +113,8 @@ def print_scan_results(log_files: List[LogFile]) -> None:
     table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
     table.add_column("File", style="bold")
     table.add_column("Size", justify="right")
-    table.add_column("Lines", justify="right")
+    table.add_column("Entries", justify="right")
+    table.add_column("Raw Lines", justify="right")
     table.add_column("Modified", style="dim")
     table.add_column("Encoding")
     table.add_column("Time Range")
@@ -132,6 +133,7 @@ def print_scan_results(log_files: List[LogFile]) -> None:
             lf.path,
             format_size(lf.size),
             str(lf.line_count),
+            str(lf.raw_line_count),
             lf.modified.strftime("%Y-%m-%d %H:%M"),
             lf.encoding,
             time_range,
@@ -142,56 +144,121 @@ def print_scan_results(log_files: List[LogFile]) -> None:
 
     total_size = sum(lf.size for lf in log_files)
     total_lines = sum(lf.line_count for lf in log_files)
-    console.print(f"\n[dim]Total: {len(log_files)} files, {format_size(total_size)}, {total_lines} lines[/dim]")
+    total_raw = sum(lf.raw_line_count for lf in log_files)
+    console.print(f"\n[dim]Total: {len(log_files)} files, {format_size(total_size)}, {total_lines} entries, {total_raw} raw lines[/dim]")
 
 
-def print_stats(stats: StatsResult) -> None:
+def print_stats(stats: StatsResult, top_n: int = 10) -> None:
     console.print()
     console.print(Panel("[bold cyan]Log Statistics[/bold cyan]", border_style="cyan"))
 
+    error_count = sum([stats.level_counts.get(l, 0) for l in ["ERROR", "FATAL", "CRITICAL"]])
+    warn_count = stats.level_counts.get("WARNING", 0) + stats.level_counts.get("WARN", 0)
+
     table = Table(show_header=False, box=None)
     table.add_row("[bold]Total entries:", str(stats.total_entries))
+    table.add_row("[bold red]Error entries:", f"[bold red]{error_count}[/bold red]")
+    table.add_row("[bold yellow]Warning entries:", f"[bold yellow]{warn_count}[/bold yellow]")
     console.print(table)
 
     console.print()
     console.print("[bold magenta]Level Distribution:[/bold magenta]")
+    if stats.level_counts:
+        max_level_count = max(stats.level_counts.values())
+    else:
+        max_level_count = 0
     for level in ["TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "FATAL", "CRITICAL"]:
         count = stats.level_counts.get(level, 0)
         if count > 0:
-            bar_len = min(50, int(count / max(stats.level_counts.values()) * 50)) if stats.level_counts else 0
+            bar_len = min(50, int(count / max_level_count * 50)) if max_level_count else 0
             bar = "█" * bar_len
             color = LEVEL_COLORS.get(level, "white")
-            console.print(f"  [{color}]{level.upper():<10}[/{color}] {count:>6} [{color}]{bar}[/{color}]")
+            pct = (count / stats.total_entries * 100) if stats.total_entries else 0
+            console.print(f"  [{color}]{level.upper():<10}[/{color}] {count:>6} ({pct:>5.1f}%) [{color}]{bar}[/{color}]")
+
+    if stats.error_trend:
+        console.print()
+        console.print("[bold magenta]Error Trend (5-min buckets):[/bold magenta]")
+        table = Table(show_header=True, header_style="bold", box=box.SIMPLE)
+        table.add_column("Time Bucket")
+        table.add_column("Errors", justify="right")
+        table.add_column("Chart")
+
+        max_err = max(stats.error_trend.values())
+        for bucket in sorted(stats.error_trend.keys()):
+            count = stats.error_trend[bucket]
+            bar_len = min(40, int(count / max_err * 40)) if max_err else 0
+            bar = "█" * bar_len
+            table.add_row(bucket, str(count), f"[red]{bar}[/red]")
+        console.print(table)
 
     if stats.api_stats:
         console.print()
-        console.print("[bold magenta]API Performance:[/bold magenta]")
+        console.print("[bold magenta]API Performance (with percentiles):[/bold magenta]")
         table = Table(show_header=True, header_style="bold", box=box.SIMPLE)
         table.add_column("API Path")
         table.add_column("Count", justify="right")
         table.add_column("Avg(ms)", justify="right")
-        table.add_column("Min(ms)", justify="right")
-        table.add_column("Max(ms)", justify="right")
+        table.add_column("P50(ms)", justify="right")
+        table.add_column("P90(ms)", justify="right")
+        table.add_column("P95(ms)", justify="right")
         table.add_column("Errors", justify="right")
 
         sorted_apis = sorted(stats.api_stats.values(), key=lambda x: x.avg_time, reverse=True)
         for api in sorted_apis[:15]:
             err_style = "red" if api.error_count > 0 else "default"
+            p50_style = "yellow" if api.p50 > 500 else "default"
+            p90_style = "red" if api.p90 > 1000 else "yellow" if api.p90 > 500 else "default"
+            p95_style = "red" if api.p95 > 1000 else "yellow" if api.p95 > 500 else "default"
             table.add_row(
                 api.path,
                 str(api.count),
                 f"{api.avg_time:.1f}",
-                f"{api.min_time:.1f}",
-                f"{api.max_time:.1f}",
+                f"[{p50_style}]{api.p50:.1f}[/{p50_style}]",
+                f"[{p90_style}]{api.p90:.1f}[/{p90_style}]",
+                f"[{p95_style}]{api.p95:.1f}[/{p95_style}]",
                 f"[{err_style}]{api.error_count}[/{err_style}]",
             )
         console.print(table)
 
-    if stats.exception_counts:
+    if stats.slowest_apis:
         console.print()
-        console.print("[bold magenta]Exception Types:[/bold magenta]")
-        for exc, count in sorted(stats.exception_counts.items(), key=lambda x: x[1], reverse=True):
-            console.print(f"  [red]{exc:<50}[/red] {count:>4} times")
+        console.print(f"[bold magenta]🏆 Top {min(top_n, len(stats.slowest_apis))} Slowest APIs (by avg time):[/bold magenta]")
+        for i, (path, avg, p95, count) in enumerate(stats.slowest_apis, 1):
+            medal = ""
+            if i == 1:
+                medal = "🥇"
+            elif i == 2:
+                medal = "🥈"
+            elif i == 3:
+                medal = "🥉"
+            console.print(f"  {medal}[yellow]{i:>2}.[/yellow] [red]{avg:>8.1f}ms[/red] (P95: {p95:.0f}ms) {count:>4}x  {path}")
+
+    if stats.exception_groups:
+        console.print()
+        console.print(f"[bold magenta]Aggregated Exceptions:[/bold magenta]")
+        table = Table(show_header=True, header_style="bold", box=box.SIMPLE)
+        table.add_column("#", justify="right")
+        table.add_column("Count", justify="right")
+        table.add_column("Exception: First Message", overflow="fold")
+
+        sorted_groups = sorted(stats.exception_groups.items(), key=lambda x: x[1], reverse=True)
+        for i, (key, count) in enumerate(sorted_groups[:top_n], 1):
+            table.add_row(str(i), str(count), f"[red]{key}[/red]")
+        console.print(table)
+
+    if stats.most_frequent_exceptions:
+        console.print()
+        console.print(f"[bold magenta]🏆 Top {min(top_n, len(stats.most_frequent_exceptions))} Most Frequent Exceptions:[/bold magenta]")
+        for i, (key, count) in enumerate(stats.most_frequent_exceptions, 1):
+            medal = ""
+            if i == 1:
+                medal = "🥇"
+            elif i == 2:
+                medal = "🥈"
+            elif i == 3:
+                medal = "🥉"
+            console.print(f"  {medal}[yellow]{i:>2}.[/yellow] {count:>4}x  [red]{key[:100]}[/red]")
 
     if stats.top_errors:
         console.print()
@@ -201,7 +268,7 @@ def print_stats(stats: StatsResult) -> None:
 
     if stats.time_distribution:
         console.print()
-        console.print("[bold magenta]Time Distribution:[/bold magenta]")
+        console.print("[bold magenta]Total Requests Time Distribution:[/bold magenta]")
         table = Table(show_header=True, header_style="bold", box=box.SIMPLE)
         table.add_column("Hour")
         table.add_column("Count", justify="right")

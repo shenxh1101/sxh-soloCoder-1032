@@ -2,15 +2,16 @@ from typing import Iterator, List, Optional
 from datetime import datetime
 
 from .models import LogEntry, FilterOptions
+from .parser import compare_times
 
 
 def matches_filter(entry: LogEntry, options: FilterOptions) -> bool:
     if options.start_time and entry.timestamp:
-        if entry.timestamp < options.start_time:
+        if compare_times(entry.timestamp, options.start_time) < 0:
             return False
 
     if options.end_time and entry.timestamp:
-        if entry.timestamp > options.end_time:
+        if compare_times(entry.timestamp, options.end_time) > 0:
             return False
 
     if options.levels:
